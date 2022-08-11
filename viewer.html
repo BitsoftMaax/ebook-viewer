@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <script type="text/javascript" src="js/jquery.min.js"></script>
+    <script type="text/javascript" src="js/jquery-ui.min.js"></script>
+    <script type="text/javascript" src="lib/hash.js"></script>
+    <script type="text/javascript" src="lib/turn.min.js"></script>
+    <script type="text/javascript" src="lib/zoom.min.js"></script>
+    <script type="text/javascript" src="js/docs.js"></script>
+    <script src="pdfjs/pdf.js"></script>
+    <link rel="stylesheet" href="css/docs.css" />
+    <link rel="stylesheet" href="css/jquery.ui.css" />
+  </head>
+  <body>
+    <div id="canvas">
+      <div class="controller">
+        <a
+          class="download-icon"
+          download=""
+          href="https://raw.githubusercontent.com/mozilla/pdf.js/ba2edeae/web/compressed.tracemonkey-pldi-09.pdf"
+        ></a>
+
+        <div class="zoom-icon zoom-icon-in"></div>
+        <div class="full-screen"></div>
+        <!-- <div class="zoom-icon zoom-icon-in"></div> -->
+        <!-- <div class="zoom-icon zoom-icon-in"></div> -->
+      </div>
+
+      <div class="magazine-viewport">
+        <div class="container">
+          <div class="magazine">
+            <!-- Next button -->
+            <div ignore="1" class="next-button"></div>
+            <!-- Previous button -->
+            <div ignore="1" class="previous-button"></div>
+          </div>
+        </div>
+      </div>
+      <div id="slider-bar" class="turnjs-slider slider-of-magazine">
+        <div id="slider">
+          <div class="hard"></div>
+        </div>
+      </div>
+    </div>
+
+    <script type="text/javascript">
+      var url = qs('url')
+      var bg = qs('bg')
+      document.body.style.backgroundImage = "url('" + bg + "')"
+      var numberOfPages = 0
+      var rendered = []
+      var firstPagesRendered = false
+
+      var pdf = null,
+        pageNum = 1,
+        mainScale = 0.75
+
+      function renderPage(num) {
+        pdf.getPage(num).then(function (page) {
+          var viewport = page.getViewport({ scale: mainScale })
+          var outputScale = window.devicePixelRatio || 1
+          // Prepare canvas using PDF page dimensions
+          var canvasID = 'canv' + num
+          var canvas = document.getElementById(canvasID)
+          if (canvas == null) return
+          var context = canvas.getContext('2d')
+          canvas.height = Math.floor(viewport.height * outputScale)
+          canvas.width = Math.floor(viewport.width * outputScale)
+          canvas.style.width = Math.floor(viewport.width) + 'px'
+          canvas.style.height = Math.floor(viewport.height) + 'px'
+          var transform =
+            outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : null
+          // Render PDF page into canvas context
+          var renderContext = {
+            canvasContext: context,
+            transform: transform,
+            viewport: viewport
+          }
+          page.render(renderContext)
+
+          // Update page counters
+          //document.getElementById('page-number').textContent = pageNum;
+          //document.getElementById('number-pages').textContent = pdf.numPages;
+        })
+      }
+
+      function addPageFromPdfjs(page, book) {
+        if (!book.turn('hasPage', page)) {
+          var element = $('<div />', {
+            class: 'page ' + (page % 2 == 0 ? 'odd' : 'even'),
+            id: 'page-' + page
+          })
+          element.html(
+            '<div class="gradient"></div><canvas id="canv' +
+              page +
+              '"></canvas>'
+          )
+          book.turn('addPage', element, page)
+          //renderPage(page);
+        }
+      }
+
+      $(window).ready(function () {
+        var pdfjsLib = window['pdfjs-dist/build/pdf']
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs/pdf.worker.js'
+        //'https://mozilla.github.io/pdf.js/build/pdf.worker.js';
+
+        var loadingTask = pdfjsLib.getDocument(url)
+
+        loadingTask.promise.then(function (pdfDoc) {
+          numberOfPages = pdfDoc.numPages
+          console.log(numberOfPages)
+          pdf = pdfDoc
+          loadApp()
+        })
+      })
+
+      function loadApp() {
+        $('#canvas').fadeIn(1000)
+        var book = $('.magazine')
+        if (book.width() == 0 || book.height() == 0) {
+          setTimeout(loadApp, 10)
+          return
+        }
+
+        $('.magazine').on('wheel', function (event) {
+          event = event.originalEvent
+
+          var data = $(this).data(),
+            flipbook = $('.magazine'),
+            view = flipbook.turn('view', page).filter((page) => page != 0),
+            page = flipbook.turn('page'),
+            delay = 500 //ms
+
+          if (typeof data.scrollTimer === 'undefined') data.scrollTimer = 0
+
+          if (data.scrollTimer > event.timeStamp) return
+
+          data.scrollTimer = event.timeStamp + delay
+
+          if (event.deltaY > 0) page = Math.max(...view) + 1
+          if (event.deltaY < 0) page = Math.min(...view) - 1
+
+          page = Math.max(Math.min(flipbook.turn('pages'), page), 1)
+
+          flipbook.turn('page', page)
+        })
+        $('#slider').slider({
+          min: 1,
+          max: numberOfPages / 2 + 1,
+          start: function (event, ui) {
+            setPreview(ui.value)
+            moveBar(false)
+          },
+          slide: function (event, ui) {
+            setPreview(ui.value)
+          },
+
+          stop: function () {
+            $('.magazine').turn(
+              'page',
+              Math.max(1, $(this).slider('value') * 2 - 2)
+            )
+          }
+        })
+
+        Hash.on('^page\/([0-9]*)$', {
+          yep: function (path, parts) {
+            var page = parts[1]
+
+            if (page !== undefined) {
+              if ($('.magazine').turn('is')) $('.magazine').turn('page', page)
+            }
+          },
+          nop: function (path) {
+            if ($('.magazine').turn('is')) $('.magazine').turn('page', 1)
+          }
+        })
+
+        $(document).on('keydown', function (e) {
+          var previous = 37,
+            next = 39
+          switch (e.keyCode) {
+            case previous:
+              $('.magazine').turn('previous')
+              break
+            case next:
+              $('.magazine').turn('next')
+              break
+          }
+        })
+
+        $('#slider').slider('value', 1)
+
+        $('.zoom-icon')
+          .mouseover(function () {
+            if ($(this).hasClass('zoom-icon-in'))
+              $(this).addClass('zoom-icon-in-hover')
+
+            if ($(this).hasClass('zoom-icon-out'))
+              $(this).addClass('zoom-icon-out-hover')
+          })
+          .mouseout(function () {
+            if ($(this).hasClass('zoom-icon-in'))
+              $(this).removeClass('zoom-icon-in-hover')
+
+            if ($(this).hasClass('zoom-icon-out'))
+              $(this).removeClass('zoom-icon-out-hover')
+          })
+          .click(function () {
+            if ($(this).hasClass('zoom-icon-in'))
+              $('.magazine-viewport').zoom('zoomIn')
+            else if ($(this).hasClass('zoom-icon-out'))
+              $('.magazine-viewport').zoom('zoomOut')
+          })
+        //book.turn().pages=numberOfPages;
+        book.turn({
+          elevation: 50,
+          acceleration: false,
+          gradients: !$.isTouch,
+          // autoCenter: true,
+          duration: 1000,
+          pages: numberOfPages,
+          when: {
+            turning: function (e, page, view) {
+              var book = $(this),
+                currentPage = book.turn('page'),
+                pages = book.turn('pages')
+
+              if (currentPage > 3 && currentPage < pages - 3) {
+                if (page == 1) {
+                  book.turn('page', 2).turn('stop').turn('page', page)
+                  e.preventDefault()
+                  return
+                } else if (page == pages) {
+                  book
+                    .turn('page', pages - 1)
+                    .turn('stop')
+                    .turn('page', page)
+                  e.preventDefault()
+                  return
+                }
+              } else if (page > 3 && page < pages - 3) {
+                if (currentPage == 1) {
+                  book.turn('page', 2).turn('stop').turn('page', page)
+                  e.preventDefault()
+                  return
+                } else if (currentPage == pages) {
+                  book
+                    .turn('page', pages - 1)
+                    .turn('stop')
+                    .turn('page', page)
+                  e.preventDefault()
+                  return
+                }
+              }
+
+              Hash.go('page/' + page).update()
+
+              if (page == 1 || page == pages) $('.sample-docs .tabs').hide()
+            },
+
+            turned: function (e, page, view) {
+              var book = $(this)
+              var range = $(this).turn('range', range)
+              for (page = range[0]; page <= range[1]; page++) {
+                if (!rendered[page]) {
+                  renderPage(page)
+                  rendered[page] = true
+                }
+              }
+              $('#slider').slider('value', getViewNumber(book, page))
+              book.turn('center')
+            },
+
+            start: function (e, pageObj) {
+              moveBar(true)
+            },
+
+            end: function (e, pageObj) {
+              var book = $(this)
+              setTimeout(function () {
+                $('#slider').slider('value', getViewNumber(book))
+              }, 1)
+              moveBar(false)
+            },
+
+            missing: function (e, pages) {
+              for (var i = 0; i < pages.length; i++) {
+                addPageFromPdfjs(pages[i], $(this))
+              }
+            }
+          }
+        })
+        let n = numberOfPages
+        if (n > 6) n = 6
+        for (page = 1; page <= n; page++) {
+          renderPage(page)
+          rendered[page] = true
+        }
+        firstPagesRendered = true
+
+        // Zoom.js
+
+        $('.magazine-viewport').zoom({
+          flipbook: $('.magazine'),
+
+          max: function () {
+            return largeMagazineWidth() / $('.magazine').width()
+          },
+
+          when: {
+            swipeLeft: function () {
+              $(this).zoom('flipbook').turn('next')
+            },
+            swipeRight: function () {
+              $(this).zoom('flipbook').turn('previous')
+            },
+
+            resize: function (event, scale, page, pageElement) {
+              renderPage(page)
+              // if (scale==1)
+              //     loadSmallPage(page, pageElement);
+              // else
+              //     loadLargePage(page, pageElement);
+            },
+
+            zoomIn: function () {
+              mainScale = 1.8
+              $('.thumbnails').hide()
+              $('.made').hide()
+              $('.magazine').removeClass('animated').addClass('zoom-in')
+              $('.zoom-icon')
+                .removeClass('zoom-icon-in')
+                .addClass('zoom-icon-out')
+
+              if (!window.escTip && !$.isTouch) {
+                escTip = true
+
+                $('<div />', { class: 'exit-message' })
+                  .html('<div>Press ESC to exit</div>')
+                  .appendTo($('body'))
+                  .delay(2000)
+                  .animate({ opacity: 0 }, 500, function () {
+                    $(this).remove()
+                  })
+              }
+            },
+
+            zoomOut: function () {
+              mainScale = 0.75
+              $('.exit-message').hide()
+              $('.thumbnails').fadeIn()
+              $('.made').fadeIn()
+              $('.zoom-icon')
+                .removeClass('zoom-icon-out')
+                .addClass('zoom-icon-in')
+
+              setTimeout(function () {
+                $('.magazine').addClass('animated').removeClass('zoom-in')
+                resizeViewport()
+              }, 0)
+            }
+          }
+        })
+
+        // Zoom event
+
+        if ($.isTouch) $('.magazine-viewport').on('zoom.doubleTap', zoomTo)
+        else $('.magazine-viewport').on('zoom.tap', zoomTo)
+
+        // Using arrow keys to turn the page
+
+        $(document).on('keydown', function (e) {
+          var previous = 37,
+            next = 39,
+            esc = 27
+
+          switch (e.keyCode) {
+            case previous:
+              // left arrow
+              $('.magazine').turn('previous')
+              e.preventDefault()
+
+              break
+            case next:
+              //right arrow
+              $('.magazine').turn('next')
+              e.preventDefault()
+
+              break
+            case esc:
+              $('.magazine-viewport').zoom('zoomOut')
+              e.preventDefault()
+
+              break
+          }
+        })
+
+        // URIs - Format #/page/1
+
+        Hash.on('^page\/([0-9]*)$', {
+          yep: function (path, parts) {
+            var page = parts[1]
+
+            if (page !== undefined) {
+              if ($('.magazine').turn('is')) $('.magazine').turn('page', page)
+            }
+          },
+          nop: function (path) {
+            if ($('.magazine').turn('is')) $('.magazine').turn('page', 1)
+          }
+        })
+
+        $(window)
+          .on('resize', function () {
+            resizeViewport()
+          })
+          .on('orientationchange', function () {
+            resizeViewport()
+          })
+
+        // Events for thumbnails
+
+        // Regions
+
+        if ($.isTouch) {
+          $('.magazine').on('touchstart', regionClick)
+        } else {
+          $('.magazine').on('click', regionClick)
+        }
+
+        // Events for the next button
+
+        $('.next-button')
+          .on($.mouseEvents.over, function () {
+            $(this).addClass('next-button-hover')
+          })
+          .on($.mouseEvents.out, function () {
+            $(this).removeClass('next-button-hover')
+          })
+          .on($.mouseEvents.down, function () {
+            $(this).addClass('next-button-down')
+          })
+          .on($.mouseEvents.up, function () {
+            $(this).removeClass('next-button-down')
+          })
+          .on('click', function () {
+            $('.magazine').turn('next')
+          })
+
+        // Events for the next button
+
+        $('.previous-button')
+          .on($.mouseEvents.over, function () {
+            $(this).addClass('previous-button-hover')
+          })
+          .on($.mouseEvents.out, function () {
+            $(this).removeClass('previous-button-hover')
+          })
+          .on($.mouseEvents.down, function () {
+            $(this).addClass('previous-button-down')
+          })
+          .on($.mouseEvents.up, function () {
+            $(this).removeClass('previous-button-down')
+          })
+          .on('click', function () {
+            $('.magazine').turn('previous')
+          })
+
+        resizeViewport()
+
+        $('.magazine').addClass('animated')
+      }
+
+      $('#canvas').hide()
+    </script>
+  </body>
+</html>
